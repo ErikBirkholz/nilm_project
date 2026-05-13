@@ -1,187 +1,80 @@
 """
 data_generator.py
-NILM Projekt - Milestone 1.2
-Synthetischer Datengenerator:
-  - Zeitplanbasiertes Ein-/Ausschalten der Laborgeräte
-  - Aggregiertes Zeitsignal (Overall Power)
-  - Realistisches Messrauschen
-  - Ground-Truth-Tabelle (welches Gerät wann aktiv)
-  - Kein gleichzeitiges Schalten (Concurrent Events ausgeschlossen)
-  - CSV-Export identisch zum PAC4200-Format
+NILM Projekt - Milestone 1.1
 """
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import os
-from datetime import datetime, timedelta
-from device_profiles import DEVICE_PROFILES, get_profile
+from device_profiles import DEVICE_PROFILES
 
-# ─────────────────────────────────────────────
-# KONFIGURATION
-# ─────────────────────────────────────────────
-OUTPUT_CSV       = "data/raw_measurements.csv"
-GROUND_TRUTH_CSV = "data/ground_truth.csv"
-START_TIME       = datetime(2026, 5, 14, 8, 0, 0)
-SAMPLE_INTERVAL  = 1        # Sekunden
-NOISE_FACTOR     = 0.02     # 2% Rauschen
-HARMONICS_ORDER  = list(range(2, 32))
+OUTPUT_FILE = "data/nilm_raw.csv"
+SAMPLE_RATE = 1       # Hz
+DURATION    = 1200    # Sekunden
+NOISE_PCT   = 0.02
+RANDOM_SEED = 42
 
-# ─────────────────────────────────────────────
-# ZEITPLAN
-# (t_on_sec, t_off_sec, device, state)
-# Kein überlappender Zeitraum → kein Concurrent Switching!
-# ─────────────────────────────────────────────
 SCHEDULE = [
-    (   10,   60,  "fridge",          "COMPRESSOR_ON"),
-    (   70,  130,  "pc",              "IDLE"),
-    (  140,  200,  "pc",              "NORMAL"),
-    (  210,  270,  "resistive_load",  "50PCT"),
-    (  280,  340,  "hairdryer",       "WARM"),
-    (  350,  410,  "washing_machine", "WASH"),
-    (  420,  480,  "washing_machine", "SPIN"),
-    (  490,  550,  "ev_charger",      "MODE2_16A"),
-    (  560,  620,  "pv_inverter",     "MEDIUM"),
-    (  630,  690,  "sync_machine",    "MOTOR_HALF"),
-    (  700,  760,  "fridge",          "COMPRESSOR_ON"),
-    (  770,  830,  "pc",              "FULL"),
-    (  840,  900,  "hairdryer",       "HOT"),
-    (  910,  970,  "washing_machine", "HEAT"),
-    (  980, 1040,  "ev_charger",      "TAPER"),
-    ( 1050, 1110,  "resistive_load",  "100PCT"),
-    ( 1120, 1180,  "sync_machine",    "MOTOR_FULL"),
-    ( 1190, 1250,  "pv_inverter",     "HIGH"),
+    (   0, 1200, "fridge",          "COMPRESSOR_ON"),
+    ( 120,  900, "pc",              "NORMAL"),
+    ( 200,  700, "washing_machine", "WASH"),
+    ( 700,  950, "washing_machine", "SPIN"),
+    ( 300,  600, "hairdryer",       "HOT"),
+    ( 450,  750, "ev_charger",      "MODE2_16A"),
+    ( 600,  900, "sync_machine",    "MOTOR_HALF"),
+    ( 700, 1000, "resistive_load",  "100PCT"),
+    ( 800, 1100, "pv_inverter",     "MEDIUM"),
 ]
 
-TOTAL_DURATION = 1300  # Sekunden
+def add_noise(value, pct, rng):
+    sigma = abs(value) * pct if value != 0 else 1.0
+    return value + rng.normal(0, sigma)
 
+def generate():
+    print("=" * 55)
+    print("  NILM Data Generator – Milestone 1.1")
+    print("=" * 55)
 
-# ─────────────────────────────────────────────
-# HILFSFUNKTIONEN
-# ─────────────────────────────────────────────
-def add_noise(value, factor=NOISE_FACTOR):
-    sigma = abs(value) * factor + 0.5
-    return value + np.random.normal(0, sigma)
+    rng       = np.random.default_rng(RANDOM_SEED)
+    t_array   = np.arange(0, DURATION, 1.0 / SAMPLE_RATE)
+    n_samples = len(t_array)
 
-def get_active_state(t_sec):
-    for t_on, t_off, device, state in SCHEDULE:
-        if t_on <= t_sec < t_off:
-            return device, state
-    return None, "OFF"
+    P_agg = np.zeros(n_samples)
+    Q_agg = np.zeros(n_samples)
 
-def get_harmonics(profile: dict) -> dict:
-    thd = profile["THD_pct"]
-    h3  = profile["H3_pct"]
-    h5  = profile["H5_pct"]
-    h7  = profile["H7_pct"]
-    harmonics = {}
-    for order in HARMONICS_ORDER:
-        if order == 3:
-            val = h3
-        elif order == 5:
-            val = h5
-        elif order == 7:
-            val = h7
-        else:
-            val = thd * (1.0 / order) * 0.5
-        harmonics[order] = round(max(0, add_noise(val, 0.05)), 3)
-    return harmonics
+    df = pd.DataFrame({"time_s": t_array})
 
+    devices_in_schedule = list({d for _, _, d, _ in SCHEDULE})
+    for dev in devices_in_schedule:
+        df[f"{dev}_P"] = 0.0
+        df[f"{dev}_Q"] = 0.0
 
-# ─────────────────────────────────────────────
-# MESSWERT ERZEUGEN
-# ─────────────────────────────────────────────
-def generate_sample(t_sec: int, timestamp: datetime) -> dict:
-    device, state = get_active_state(t_sec)
+    for start, end, device, state in SCHEDULE:
+        mask    = (t_array >= start) & (t_array < end)
+        profile = DEVICE_PROFILES[device]["states"][state]
+        p_val   = float(profile["P_W"])
+        q_val   = float(profile["Q_VAR"])
 
-    if device is not None:
-        profile = get_profile(device, state)
-    else:
-        profile = {"P_W": 5, "Q_VAR": 2, "cos_phi": 0.99,
-                   "THD_pct": 0.5, "H3_pct": 0.1, "H5_pct": 0.1, "H7_pct": 0.1}
+        df.loc[mask, f"{device}_P"] += p_val
+        df.loc[mask, f"{device}_Q"] += q_val
+        P_agg[mask] += p_val
+        Q_agg[mask] += q_val
 
-    P  = add_noise(profile["P_W"])
-    Q  = add_noise(profile["Q_VAR"])
-    S  = np.sqrt(P**2 + Q**2)
-    pf = abs(P) / S if S > 0 else 1.0
-    I  = S / 230.0 if S > 0 else 0.0
+        print(f"  [{start:4d}s–{end:4d}s]  {device:<18} {state:<14} "
+              f"P={p_val:>7.0f} W")
 
-    sample = {
-        "timestamp":                timestamp.isoformat(),
-        "total_active_power_W":     round(P, 2),
-        "total_apparent_power_VA":  round(S, 2),
-        "total_reactive_power_VAR": round(Q, 2),
-        "voltage_L1_V":             round(add_noise(230.0, 0.005), 2),
-        "voltage_L2_V":             round(add_noise(230.0, 0.005), 2),
-        "voltage_L3_V":             round(add_noise(230.0, 0.005), 2),
-        "current_L1_A":             round(max(0, add_noise(I, 0.02)), 3),
-        "current_L2_A":             round(max(0, add_noise(I * 0.99, 0.02)), 3),
-        "current_L3_A":             round(max(0, add_noise(I * 1.01, 0.02)), 3),
-        "frequency_Hz":             round(add_noise(50.0, 0.001), 3),
-        "power_factor":             round(min(1.0, max(0.0, add_noise(pf, 0.005))), 4),
-        "appliance_active_device":  device if device else "none",
-        "appliance_active_state":   state,
-        "appliance_active_P_W":     round(P, 2) if device else 0.0,
-    }
+    P_noisy = np.array([add_noise(v, NOISE_PCT, rng) for v in P_agg])
+    Q_noisy = np.array([add_noise(v, NOISE_PCT, rng) for v in Q_agg])
 
-    harmonics = get_harmonics(profile)
-    for order, val in harmonics.items():
-        sample[f"H{order}_current_L1_pct"] = val
+    df.insert(1, "P_total_W",   P_noisy)
+    df.insert(2, "Q_total_VAR", Q_noisy)
 
-    return sample
+    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+    df.to_csv(OUTPUT_FILE, index=False, float_format="%.4f")
 
-
-# ─────────────────────────────────────────────
-# GROUND TRUTH TABELLE
-# ─────────────────────────────────────────────
-def build_ground_truth() -> pd.DataFrame:
-    rows = []
-    for t_on, t_off, device, state in SCHEDULE:
-        ts_on  = START_TIME + timedelta(seconds=t_on)
-        ts_off = START_TIME + timedelta(seconds=t_off)
-        profile = get_profile(device, state)
-        rows.append({
-            "t_on":    ts_on.isoformat(),
-            "t_off":   ts_off.isoformat(),
-            "device":  device,
-            "state":   state,
-            "P_W":     profile["P_W"],
-            "Q_VAR":   profile["Q_VAR"],
-            "cos_phi": profile["cos_phi"],
-            "THD_pct": profile["THD_pct"],
-        })
-    return pd.DataFrame(rows)
-
-
-# ─────────────────────────────────────────────
-# HAUPTPROGRAMM
-# ─────────────────────────────────────────────
-def main():
-    print("=" * 60)
-    print("  NILM Datengenerator – Milestone 1.2")
-    print(f"  Startzeit:  {START_TIME}")
-    print(f"  Dauer:      {TOTAL_DURATION}s ({TOTAL_DURATION//60} min)")
-    print(f"  Abtastrate: {SAMPLE_INTERVAL}s → {TOTAL_DURATION} Samples")
-    print("=" * 60)
-
-    os.makedirs("data", exist_ok=True)
-
-    samples = []
-    for t in range(TOTAL_DURATION):
-        ts = START_TIME + timedelta(seconds=t)
-        sample = generate_sample(t, ts)
-        samples.append(sample)
-        if t % 100 == 0:
-            dev, state = get_active_state(t)
-            print(f"  t={t:4d}s | {dev or 'NONE':<20} {state:<15} | "
-                  f"P={sample['total_active_power_W']:8.1f}W")
-
-    df = pd.DataFrame(samples)
-    df.to_csv(OUTPUT_CSV, index=False)
-    print(f"\n[OK] Messdaten:   {OUTPUT_CSV}  ({len(df)} Zeilen)")
-
-    gt = build_ground_truth()
-    gt.to_csv(GROUND_TRUTH_CSV, index=False)
-    print(f"[OK] Ground Truth: {GROUND_TRUTH_CSV}  ({len(gt)} Events)")
+    print(f"\n  Samples : {n_samples}")
+    print(f"  Datei   : {OUTPUT_FILE}")
+    print("=" * 55)
 
 if __name__ == "__main__":
-    main()
+    generate()
