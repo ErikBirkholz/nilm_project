@@ -232,7 +232,7 @@ def plot_pq_diagram(df, gt):
 
 
 # ─────────────────────────────────────────────
-# PLOT 3: HARMONICS SPEKTRUM PRO GERÄT
+# PLOT 3: HARMONICS HEATMAP PRO GERÄT
 # ─────────────────────────────────────────────
 def plot_harmonics_spectrum(df):
     h_cols = [c for c in df.columns
@@ -247,43 +247,149 @@ def plot_harmonics_spectrum(df):
         devices = [d for d in df["appliance_active_device"].unique() if d != "none"]
 
     if not devices:
-        fig, ax = plt.subplots(figsize=(14, 5))
-        values = [df[c].mean() for c in h_cols]
-        ax.bar(orders, values, color="#01696f", edgecolor="white")
-        ax.set_title("Harmonics-Spektrum (Gesamt-Durchschnitt)")
-        ax.set_xlabel("Harmonische Ordnung")
-        ax.set_ylabel("Amplitude [%]")
-        ax.grid(True, axis="y", alpha=0.3)
-    else:
-        n    = len(devices)
-        cols = min(3, n)
-        rows = (n + cols - 1) // cols
-        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 4 * rows))
-        fig.suptitle("Harmonics-Spektrum pro Gerät (Fingerabdruck)",
-                     fontsize=13, fontweight="bold")
-        axes = np.array(axes).flatten() if n > 1 else [axes]
+        print("[INFO] Keine Gerätezuordnung vorhanden.")
+        return
 
-        for i, device in enumerate(devices):
-            ax    = axes[i]
-            mask  = df["appliance_active_device"] == device
-            if mask.sum() == 0:
-                continue
-            values     = [df.loc[mask, c].mean() for c in h_cols]
-            color      = DEVICE_COLORS.get(device, "#aaaaaa")
-            bar_colors = [color if o in [3, 5, 7, 11, 13] else "#d0d0d0" for o in orders]
-            ax.bar(orders, values, color=bar_colors, edgecolor="white", linewidth=0.5)
-            ax.set_title(device.replace("_", " "), fontsize=10,
-                         fontweight="bold", color=color)
-            ax.set_xlabel("Ordnung")
-            ax.set_ylabel("Amplitude [%]")
-            ax.set_xticks(orders[::3])
-            ax.grid(True, axis="y", alpha=0.3)
+    # Matrix aufbauen: Zeilen = Geräte, Spalten = Harmonics
+    matrix = []
+    for device in devices:
+        mask = df["appliance_active_device"] == device
+        row  = [df.loc[mask, c].mean() if mask.sum() > 0 else 0.0 for c in h_cols]
+        matrix.append(row)
 
-        for j in range(i + 1, len(axes)):
-            axes[j].set_visible(False)
+    import numpy as np
+    data = np.array(matrix)
+
+    fig, ax = plt.subplots(figsize=(18, max(4, len(devices) * 0.8)))
+    fig.suptitle("Harmonics-Fingerabdruck pro Gerät (Heatmap)",
+                 fontsize=13, fontweight="bold")
+
+    im = ax.imshow(data, aspect="auto", cmap="YlOrRd", interpolation="nearest")
+
+    # Achsenbeschriftung
+    ax.set_xticks(range(len(orders)))
+    ax.set_xticklabels([f"H{o}" for o in orders], fontsize=8, rotation=45, ha="right")
+    ax.set_yticks(range(len(devices)))
+    ax.set_yticklabels([d.replace("_", " ") for d in devices], fontsize=10)
+
+    # Werte in Zellen schreiben
+    for i in range(len(devices)):
+        for j in range(len(orders)):
+            val = data[i, j]
+            text_color = "white" if val > data.max() * 0.6 else "black"
+            ax.text(j, i, f"{val:.1f}",
+                    ha="center", va="center",
+                    fontsize=7, color=text_color)
+
+    # Wichtige Ordnungen markieren (H3, H5, H7, H11, H13)
+    key_orders = [3, 5, 7, 11, 13]
+    for ko in key_orders:
+        if ko in orders:
+            j = orders.index(ko)
+            ax.axvline(j - 0.5, color="#01696f", linewidth=1.5, alpha=0.6)
+            ax.axvline(j + 0.5, color="#01696f", linewidth=1.5, alpha=0.6)
+
+    # Colorbar
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+    cbar.set_label("Amplitude [% Grundschwingung]", fontsize=9)
+
+    ax.set_xlabel("Harmonische Ordnung", fontsize=10)
+    ax.set_ylabel("Gerät", fontsize=10)
+
+    # Legende für markierte Ordnungen
+    from matplotlib.lines import Line2D
+    legend = [Line2D([0], [0], color="#01696f", linewidth=2,
+                     label="Charakteristische Ordnungen (H3,H5,H7,H11,H13)")]
+    ax.legend(handles=legend, loc="upper right", fontsize=8)
 
     plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, "nilm_harmonics_spectrum.png")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    path = os.path.join(OUTPUT_DIR, "nilm_harmonics_heatmap.png")
+    plt.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
+    print(f"[OK] Gespeichert: {path}")
+    plt.show()
+
+    # ─────────────────────────────────────────────
+# PLOT 4: TIMELINE + CHARAKTERISTIKEN
+# ─────────────────────────────────────────────
+def plot_timeline(df, gt):
+    if gt.empty:
+        print("[INFO] Keine Ground-Truth-Daten für Timeline.")
+        return
+
+    from device_profiles import DEVICE_PROFILES
+
+    # Eindeutige Geräte aus Ground Truth
+    devices = gt["device"].unique().tolist()
+    n       = len(devices)
+
+    fig, axes = plt.subplots(2, 1, figsize=(18, 4 + n * 0.7 + 4),
+                             gridspec_kw={"height_ratios": [n, 3]})
+    fig.suptitle("NILM – Geräte-Timeline mit Charakteristiken",
+                 fontsize=14, fontweight="bold", y=0.99)
+
+    # ── Subplot 1: Timeline-Balken ──
+    ax1 = axes[0]
+    ax1.set_xlim(gt["t_on"].min(), gt["t_off"].max())
+    ax1.set_ylim(-0.5, n - 0.5)
+    ax1.set_yticks(range(n))
+    ax1.set_yticklabels([d.replace("_", " ") for d in devices], fontsize=10)
+    ax1.set_title("Geräte-Timeline (Ground Truth)", fontsize=11)
+    ax1.grid(True, axis="x", alpha=0.3, linestyle="--")
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=20, ha="right", fontsize=8)
+
+    for _, row in gt.iterrows():
+        y     = devices.index(row["device"])
+        color = DEVICE_COLORS.get(row["device"], "#aaaaaa")
+        dur   = (row["t_off"] - row["t_on"]).total_seconds()
+
+        # Balken
+        ax1.barh(y, width=row["t_off"] - row["t_on"],
+                 left=row["t_on"], height=0.6,
+                 color=color, alpha=0.85, edgecolor="white", linewidth=0.8)
+
+        # Charakteristiken als Text im Balken
+        profile = DEVICE_PROFILES[row["device"]]["states"][row["state"]]
+        label = (f"{row['state']}\n"
+                 f"P={profile['P_W']}W  Q={profile['Q_VAR']}VAR\n"
+                 f"cosφ={profile['cos_phi']}  THD={profile['THD_pct']}%")
+        mid = row["t_on"] + (row["t_off"] - row["t_on"]) / 2
+        ax1.text(mid, y, label,
+                 ha="center", va="center", fontsize=6.5,
+                 color="white" if color not in ["#f39c12", "#e05c2a"] else "black",
+                 fontweight="bold", linespacing=1.4)
+
+    # ── Subplot 2: Gesamtleistung darunter (synchron) ──
+    ax2 = axes[1]
+    col = "total_active_power_W_smooth" if "total_active_power_W_smooth" in df.columns \
+          else "total_active_power_W"
+
+    ax2.plot(df.index, df["total_active_power_W"],
+             color="#cccccc", linewidth=0.7, alpha=0.5, label="Rohsignal P")
+    ax2.plot(df.index, df[col],
+             color="#1a1a2e", linewidth=1.8, label="Geglättet P")
+    ax2.plot(df.index, df["total_reactive_power_VAR"],
+             color="#4a90d9", linewidth=1.2, alpha=0.6,
+             linestyle="--", label="Q Blindleistung")
+
+    # Gleiche farbige Spans wie Timeline
+    for _, row in gt.iterrows():
+        color = DEVICE_COLORS.get(row["device"], "#aaaaaa")
+        ax2.axvspan(row["t_on"], row["t_off"], alpha=0.12, color=color)
+
+    ax2.set_xlim(gt["t_on"].min(), gt["t_off"].max())
+    ax2.set_ylabel("Leistung [W / VAR]")
+    ax2.set_xlabel("Zeit")
+    ax2.set_title("Gesamtleistung (synchron zur Timeline)", fontsize=10)
+    ax2.legend(loc="upper right", fontsize=8)
+    ax2.grid(True, alpha=0.3, linestyle="--")
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=20, ha="right", fontsize=8)
+
+    plt.tight_layout()
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    path = os.path.join(OUTPUT_DIR, "nilm_timeline.png")
     plt.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
     print(f"[OK] Gespeichert: {path}")
     plt.show()
@@ -293,26 +399,20 @@ def plot_harmonics_spectrum(df):
 # HAUPTPROGRAMM
 # ─────────────────────────────────────────────
 def main():
-    print("=" * 55)
-    print("  NILM Visualization – Milestone 1.5")
-    print("=" * 55)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+    # ... bestehender Code ...
     df, gt, ev = load_all()
 
-    print("\n[1/3] Zeitreihe + Ground-Truth-Overlay...")
+    print("\n[1/4] Zeitreihe + Ground-Truth-Overlay...")
     plot_timeseries_with_groundtruth(df, gt, ev)
 
-    print("[2/3] P-Q Diagramm...")
+    print("[2/4] P-Q Diagramm...")
     plot_pq_diagram(df, gt)
 
-    print("[3/3] Harmonics-Spektrum pro Gerät...")
+    print("[3/4] Harmonics Heatmap...")
     plot_harmonics_spectrum(df)
 
-    print(f"\n[OK] Alle Plots in: {OUTPUT_DIR}/")
-    print("       nilm_timeseries_groundtruth.png")
-    print("       nilm_pq_diagram.png")
-    print("       nilm_harmonics_spectrum.png")
+    print("[4/4] Timeline mit Charakteristiken...")  # ← NEU
+    plot_timeline(df, gt)                             # ← NEU
 
 if __name__ == "__main__":
     main()
