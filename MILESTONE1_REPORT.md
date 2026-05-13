@@ -3,7 +3,7 @@
 ## NILM-Projekt: Synthetische Datengenerierung und Pipeline-Verarbeitung
 
 **Datum:** 13. Mai 2026  
-**Team-Mitglieder:** [Namen einfügen]
+**Team-Mitglieder:** Erik Birkholz, Dmitrii Kochetov, Henning Delius
 
 ## 1. Why — Problemstellung
 
