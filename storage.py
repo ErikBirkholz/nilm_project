@@ -7,9 +7,42 @@ Funktioniert im TEST- und LIVE-Modus via config.py
 import sqlite3
 import pandas as pd
 import os
-from config import RAW_CSV, COL_P_TOTAL, COL_Q_TOTAL, COL_TIME, DB_FILE, MODE
+from config import RAW_CSV, DB_FILE, MODE
 
 HARMONICS_ORDERS = list(range(2, 32))
+
+def load_data(mode: str = None) -> pd.DataFrame:
+    """
+    Lädt Messdaten unabhängig von der Quelle (TEST/LIVE).
+    
+    Returns: DataFrame mit PAC4200-Schema, indexiert nach timestamp.
+    """
+    if mode is None:
+        mode = MODE
+    
+    if mode == "TEST":
+        csv_file = "data/raw_measurements.csv"  # Nach Generierung
+    else:  # LIVE
+        csv_file = "data/raw_measurements.csv"  # Gleicher Name
+    
+    df = pd.read_csv(csv_file)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df.set_index('timestamp', inplace=True)
+    return df
+
+def load_ground_truth() -> pd.DataFrame:
+    """
+    Lädt Ground-Truth-Daten (nur für TEST-Modus verfügbar).
+    
+    Returns: DataFrame mit timestamp, active_device, active_state oder leerer DataFrame für LIVE.
+    """
+    if MODE == "TEST":
+        df = pd.read_csv("data/ground_truth.csv")
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df.set_index('timestamp', inplace=True)
+        return df
+    else:
+        return pd.DataFrame()  # Leer für LIVE
 
 def get_connection():
     os.makedirs("data", exist_ok=True)
@@ -21,17 +54,18 @@ def create_tables(conn):
     # TEST-Modus Tabelle
     conn.execute("""
         CREATE TABLE IF NOT EXISTS measurements_test (
-            time_s      REAL PRIMARY KEY,
-            P_total_W   REAL,
-            Q_total_VAR REAL,
-            fridge_P    REAL, fridge_Q    REAL,
-            pc_P        REAL, pc_Q        REAL,
-            washing_machine_P REAL, washing_machine_Q REAL,
-            hairdryer_P REAL, hairdryer_Q REAL,
-            ev_charger_P REAL, ev_charger_Q REAL,
-            sync_machine_P REAL, sync_machine_Q REAL,
-            resistive_load_P REAL, resistive_load_Q REAL,
-            pv_inverter_P REAL, pv_inverter_Q REAL
+            timestamp                TEXT PRIMARY KEY,
+            total_active_power_W     REAL,
+            total_apparent_power_VA  REAL,
+            total_reactive_power_VAR REAL,
+            voltage_L1_V             REAL,
+            voltage_L2_V             REAL,
+            voltage_L3_V             REAL,
+            current_L1_A             REAL,
+            current_L2_A             REAL,
+            current_L3_A             REAL,
+            frequency_Hz             REAL,
+            power_factor             REAL
         )
     """)
 
@@ -49,10 +83,7 @@ def create_tables(conn):
             current_L2_A             REAL,
             current_L3_A             REAL,
             frequency_Hz             REAL,
-            power_factor             REAL,
-            appliance_kettle_W       REAL,
-            appliance_fridge_W       REAL,
-            appliance_laptop_W       REAL
+            power_factor             REAL
         )
     """)
 
@@ -86,41 +117,42 @@ def store_from_csv(conn):
     df = pd.read_csv(RAW_CSV)
     print(f"      {len(df)} Zeilen, {len(df.columns)} Spalten")
 
-    if MODE == "TEST":
-        df.to_sql("measurements_test", conn, if_exists="append", index=False)
-        print(f"[OK] {len(df)} Zeilen → measurements_test")
+    measurement_cols = [
+        "timestamp",
+        "total_active_power_W", "total_apparent_power_VA",
+        "total_reactive_power_VAR",
+        "voltage_L1_V", "voltage_L2_V", "voltage_L3_V",
+        "current_L1_A", "current_L2_A", "current_L3_A",
+        "frequency_Hz", "power_factor",
+    ]
 
+    available = [c for c in measurement_cols if c in df.columns]
+    if MODE == "TEST":
+        df[available].drop_duplicates(subset="timestamp").to_sql(
+            "measurements_test", conn, if_exists="append", index=False
+        )
+        print(f"[OK] {len(df)} Zeilen → measurements_test")
     else:  # LIVE
-        base_cols = [
-            "timestamp",
-            "total_active_power_W", "total_apparent_power_VA",
-            "total_reactive_power_VAR",
-            "voltage_L1_V", "voltage_L2_V", "voltage_L3_V",
-            "current_L1_A", "current_L2_A", "current_L3_A",
-            "frequency_Hz", "power_factor",
-            "appliance_kettle_W", "appliance_fridge_W", "appliance_laptop_W",
-        ]
-        available = [c for c in base_cols if c in df.columns]
         df[available].drop_duplicates(subset="timestamp").to_sql(
             "measurements_live", conn, if_exists="append", index=False
         )
         print(f"[OK] {len(df)} Zeilen → measurements_live")
 
-        # Harmonics
-        harm_cols = [c for c in df.columns if c.endswith("_current_L1_pct")]
-        if harm_cols:
-            rows = []
-            for _, row in df.iterrows():
-                for col in harm_cols:
-                    order = int(col.replace("H","").replace("_current_L1_pct",""))
-                    rows.append({
-                        "timestamp":      row["timestamp"],
-                        "harmonic_order": order,
-                        "value_pct":      row[col],
-                    })
-            pd.DataFrame(rows).to_sql("harmonics", conn,
-                                      if_exists="append", index=False)
-            print(f"[OK] {len(rows)} Harmonics-Zeilen gespeichert")
+    # Harmonics
+    harm_cols = [c for c in df.columns if c.endswith("_current_L1_pct")]
+    if harm_cols:
+        rows = []
+        for _, row in df.iterrows():
+            for col in harm_cols:
+                order = int(col.replace("H", "").replace("_current_L1_pct", ""))
+                rows.append({
+                    "timestamp":      row["timestamp"],
+                    "harmonic_order": order,
+                    "value_pct":      row[col],
+                })
+        pd.DataFrame(rows).to_sql("harmonics", conn,
+                                  if_exists="append", index=False)
+        print(f"[OK] {len(rows)} Harmonics-Zeilen gespeichert")
 
 def insert_measurement(conn, data: dict):
     """Live-Einfügen eines Einzelmesswerts (für acquisition.py)."""
@@ -133,7 +165,6 @@ def insert_measurement(conn, data: dict):
         "voltage_L1_V", "voltage_L2_V", "voltage_L3_V",
         "current_L1_A", "current_L2_A", "current_L3_A",
         "frequency_Hz", "power_factor",
-        "appliance_kettle_W", "appliance_fridge_W", "appliance_laptop_W",
     ]
     base = {k: data.get(k) for k in base_cols}
     cols = ", ".join(base.keys())
