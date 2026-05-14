@@ -30,7 +30,9 @@ RANDOM_SEED = 42
 
 SCHEDULE = [
     (   0, 1200, "fridge",          "COMPRESSOR_ON"),
-    ( 120,  900, "pc",              "NORMAL"),
+    ( 120,  480, "pc_office",       "NORMAL"),
+    ( 500,  820, "pc_workstation", "FULL"),
+    ( 850, 1100, "pc_thinclient",  "IDLE"),
     ( 200,  700, "washing_machine", "WASH"),
     ( 700,  950, "washing_machine", "SPIN"),
     ( 300,  600, "hairdryer",       "HOT"),

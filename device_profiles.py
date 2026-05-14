@@ -2,13 +2,22 @@
 device_profiles.py
 NILM Projekt - Milestone 1.1
 Geräteprofile für alle Laborgeräte
+
+Quellen-Klassifikation der Parameterwerte:
+  [NORMATIV]  Wert direkt aus einer Norm oder Spezifikation abgeleitet
+  [REFERENZ]  Wert durch Messdatensatz oder Fachliteratur plausibilisiert
+  [ANNAHME]   Physikalisch motivierte Engineering Assumption ohne direkten Messbeleg
 """
 
 DEVICE_PROFILES = {
 
-    "pc": {
+    # Office-PC mit aktivem PFC-Schaltnetzteil (Standard-Bürorechner, mittlere Leistung)
+    # cos_phi > 0.9: IEC 61000-3-2 Klasse D schreibt PFC-Pflicht vor [NORMATIV]
+    # Effizienz-Charakteristik konsistent mit 80 PLUS Zertifizierung (plugloadsolutions.com) [REFERENZ]
+    # P-Werte (80/200/400 W) für typischen Office-PC [ANNAHME]; THD 4.5-5.0% bei PFC-Boost-Topologie [ANNAHME]
+    "pc_office": {
         "type": "II",
-        "description": "PC mit Schaltnetzteil (PFC aktiv)",
+        "description": "Office-PC mit Schaltnetzteil (PFC aktiv, ~400 W-Klasse)",
         "states": {
             "OFF":    {"P_W":   0, "Q_VAR":  0,  "cos_phi": 1.00, "THD_pct":  0.0, "H3_pct": 0.0, "H5_pct": 0.0, "H7_pct": 0.0},
             "IDLE":   {"P_W":  80, "Q_VAR": 15,  "cos_phi": 0.98, "THD_pct":  4.5, "H3_pct": 3.5, "H5_pct": 2.5, "H7_pct": 1.0},
@@ -17,6 +26,41 @@ DEVICE_PROFILES = {
         }
     },
 
+    # Workstation / Gaming-PC mit 750-W-Netzteil (PFC aktiv, höhere Leistungsklasse)
+    # cos_phi > 0.9: IEC 61000-3-2 Klasse D (PFC-Pflicht > 75 W) [NORMATIV]
+    # 80 PLUS Gold/Platinum Effizienzanforderungen für Hochleistungsnetzteile [REFERENZ]
+    # Erhöhtes THD im IDLE: 750-W-Netzteil bei ~16% Nennlast — PFC-Regler im ungünstigen Arbeitspunkt [ANNAHME]
+    # P-Werte (120/380/700 W), Q-Werte, THD-Absolutwerte: [ANNAHME]
+    "pc_workstation": {
+        "type": "II",
+        "description": "Workstation / Gaming-PC mit 750-W-Netzteil (PFC aktiv)",
+        "states": {
+            "OFF":    {"P_W":   0, "Q_VAR":  0,  "cos_phi": 1.00, "THD_pct":  0.0, "H3_pct": 0.0, "H5_pct": 0.0, "H7_pct": 0.0},
+            "IDLE":   {"P_W": 120, "Q_VAR": 20,  "cos_phi": 0.98, "THD_pct":  5.5, "H3_pct": 4.2, "H5_pct": 3.2, "H7_pct": 1.5},
+            "NORMAL": {"P_W": 380, "Q_VAR": 40,  "cos_phi": 0.99, "THD_pct":  4.8, "H3_pct": 3.8, "H5_pct": 2.8, "H7_pct": 1.3},
+            "FULL":   {"P_W": 700, "Q_VAR": 65,  "cos_phi": 0.99, "THD_pct":  5.2, "H3_pct": 4.2, "H5_pct": 3.1, "H7_pct": 1.6},
+        }
+    },
+
+    # Thin Client / Mini-PC (externes Kleinnetzteil, keine aktive PFC)
+    # Gerät < 75 W: IEC 61000-3-2 Klasse A — keine Pflicht zur aktiven PFC [NORMATIV]
+    # Ohne aktive PFC: niedrigeres cos_phi (0.93-0.95) und höheres THD (8-9%) [ANNAHME]
+    # P-Werte (8/14 W), Q-Werte, THD-Absolutwerte: [ANNAHME]
+    # Kein FULL-Zustand: Thin Clients haben keinen nennenswerten Hochlastzustand
+    "pc_thinclient": {
+        "type": "II",
+        "description": "Thin Client / Mini-PC (kein aktives PFC, < 75 W)",
+        "states": {
+            "OFF":    {"P_W":  0, "Q_VAR": 0,  "cos_phi": 1.00, "THD_pct": 0.0, "H3_pct": 0.0, "H5_pct": 0.0, "H7_pct": 0.0},
+            "IDLE":   {"P_W":  8, "Q_VAR": 3,  "cos_phi": 0.93, "THD_pct": 8.5, "H3_pct": 5.5, "H5_pct": 4.0, "H7_pct": 2.5},
+            "NORMAL": {"P_W": 14, "Q_VAR": 5,  "cos_phi": 0.94, "THD_pct": 8.0, "H3_pct": 5.2, "H5_pct": 3.8, "H7_pct": 2.2},
+        }
+    },
+
+    # Ohmsche Widerstandslast
+    # cos_phi = 1.00 exakt aus Ohm'schem Gesetz ableitbar — keine externe Quelle erforderlich
+    # THD-Residual 0.5%: konservative Annahme für Bauteilnichtidealitäten (Temperaturgang, Kontaktwiderstand) [ANNAHME]
+    # H3/H5/H7-Residual: [ANNAHME]
     "resistive_load": {
         "type": "II",
         "description": "Variable Widerstandslast (ohmsch)",
@@ -29,6 +73,9 @@ DEVICE_PROFILES = {
         }
     },
 
+    # Haartrockner (dominante Widerstandsheizung + kleiner Gebläsemotor)
+    # Keine Leistungsqualitäts-Norm verfügbar (IEC 60335-2-23 deckt nur Gerätesicherheit ab)
+    # Alle Werte physikalisch motiviert: Heizwiderstand dominant → hoher cos_phi; Motor-Anteil → geringe Harmonics [ANNAHME]
     "hairdryer": {
         "type": "II",
         "description": "Haartrockner (Heizung + Gebläsemotor)",
@@ -40,6 +87,12 @@ DEVICE_PROFILES = {
         }
     },
 
+    # Waschmaschine (Motor + Heizwiderstand, mehrere Betriebszustände)
+    # P-Größenordnungen plausibilisiert durch:
+    #   REDD: Kolter & Johnson, 2011, SustKDD Workshop at KDD [REFERENZ]
+    #   UK-DALE: Kelly & Knottenbelt, 2015, Scientific Data, DOI: 10.1038/sdata.2015.7 [REFERENZ]
+    # Q, THD, H3/H5/H7 aller Zustände: [ANNAHME]
+    # SPIN: hohe Blindleistung (Q=400 VAR) und THD (25%) durch Inverter-Motor bei variabler Drehzahl [ANNAHME]
     "washing_machine": {
         "type": "II",
         "description": "Waschmaschine (Motor + Heizwiderstand)",
@@ -52,16 +105,27 @@ DEVICE_PROFILES = {
         }
     },
 
+    # Kühlschrank (einphasiger Kompressormotor, zyklisch)
+    # P_COMPRESSOR_ON ≈ 150 W: plausibilisiert durch REDD- und BLUED-Datensatz [REFERENZ]
+    # cos_phi ≈ 0.78: typisch für einphasigen Induktionsmotor (Maschinenlehre) [REFERENZ]
+    # H3 > H5: typisches Oberschwingungsmuster einphasiger Last [ANNAHME]
+    # THD = 12%, Q, H3/H5/H7-Absolutwerte: [ANNAHME]
     "fridge": {
         "type": "I",
         "description": "Kühlschrank (Kompressormotor, zyklisch)",
         "states": {
             "OFF":           {"P_W":   0, "Q_VAR":   0,  "cos_phi": 1.00, "THD_pct":  0.0, "H3_pct": 0.0, "H5_pct": 0.0, "H7_pct": 0.0},
             "STANDBY":       {"P_W":   5, "Q_VAR":   3,  "cos_phi": 0.86, "THD_pct":  8.0, "H3_pct": 4.0, "H5_pct": 3.0, "H7_pct": 2.0},
-            "COMPRESSOR_ON": {"P_W": 150, "Q_VAR": 120,  "cos_phi": 0.78, "THD_pct": 12.0, "H3_pct": 5.0, "H5_pct": 8.0, "H7_pct": 5.0},
+            "COMPRESSOR_ON": {"P_W": 150, "Q_VAR": 120,  "cos_phi": 0.78, "THD_pct": 12.0, "H3_pct": 7.0, "H5_pct": 5.0, "H7_pct": 5.0},
         }
     },
 
+    # EV-Lader (einphasiges AC-Laden, Onboard-Charger)
+    # P-Werte EXAKT nach IEC 61851-1: P = 230 V × I [NORMATIV]
+    #   MODE1_10A: 230 V × 10 A = 2300 W; MODE2_16A: 230 V × 16 A = 3680 W; MODE3_32A: 230 V × 32 A = 7360 W
+    # THD-Grenzwerte: IEC 61000-3-2 Klasse A (Modi ≤ 16 A); IEC 61000-3-12 (MODE3_32A, > 16 A) [NORMATIV]
+    # TAPER: hoher THD (28%) durch ungünstige PFC-Arbeitspunkte bei minimaler Ladeleistung [ANNAHME]
+    # Q-Werte, exakte THD-Typwerte, H3/H5/H7: [ANNAHME]
     "ev_charger": {
         "type": "II",
         "description": "E-Auto AC-Laden (Onboard-Charger)",
@@ -74,6 +138,10 @@ DEVICE_PROFILES = {
         }
     },
 
+    # PV-Wechselrichter (Einspeisung AC, negativer P-Wert = Verbraucherzählpfeil-Konvention)
+    # THD < 5%: normativ vorgeschrieben durch IEC 61727 und VDE-AR-N 4105 [NORMATIV]
+    # Typwerte 2-3% und THD-Abnahme bei steigender Last: konsistent mit Hersteller-Whitepapern (SMA, Fronius) [REFERENZ]
+    # P-Absolutwerte, Q-Werte, H3/H5/H7: [ANNAHME]
     "pv_inverter": {
         "type": "II",
         "description": "PV-Einspeisung AC (hinter Wechselrichter)",
@@ -85,6 +153,10 @@ DEVICE_PROFILES = {
         }
     },
 
+    # Synchronmaschine (Motor- und Generatorbetrieb, Direktanlauf angenommen)
+    # P/Q/cos_phi-Charakteristik nach Maschinenlehre: Chapman, "Electric Machinery Fundamentals", McGraw-Hill [REFERENZ]
+    # cos_phi ≈ 0.20 im Leerlauf: typisch für unbelasteten Synchronmotor (kapazitive/induktive Blindleistungsaufnahme) [REFERENZ]
+    # THD/H3/H5/H7: [ANNAHME]; Oberschwingungen abhängig von Antriebstopologie — hier Direktanlauf ohne Umrichter
     "sync_machine": {
         "type": "II",
         "description": "Synchronmaschine (Motor-/Generatorbetrieb)",

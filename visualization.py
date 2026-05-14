@@ -15,7 +15,9 @@ OUTPUT_FILE = "plots/nilm_visualization.png"
 
 DEVICE_COLORS = {
     "fridge":          "#1f77b4",
-    "pc":              "#ff7f0e",
+    "pc_office":       "#ff7f0e",
+    "pc_workstation":  "#d62728",
+    "pc_thinclient":   "#ffbb78",
     "washing_machine": "#2ca02c",
     "hairdryer":       "#d62728",
     "ev_charger":      "#9467bd",

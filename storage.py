@@ -127,16 +127,24 @@ def store_from_csv(conn):
     ]
 
     available = [c for c in measurement_cols if c in df.columns]
+    # TEST-Modus überschreibt — bei jedem Aufruf wird die DB mit aktuellen
+    # synthetischen Daten neu gefüllt. DELETE behält Tabellenstruktur und Constraints.
     if MODE == "TEST":
+        conn.execute("DELETE FROM measurements_test")
+        conn.execute("DELETE FROM harmonics")
+        conn.commit()
         df[available].drop_duplicates(subset="timestamp").to_sql(
             "measurements_test", conn, if_exists="append", index=False
         )
-        print(f"[OK] {len(df)} Zeilen → measurements_test")
+        print(f"[OK] {len(df)} Zeilen -> measurements_test")
     else:  # LIVE
+        conn.execute("DELETE FROM measurements_live")
+        conn.execute("DELETE FROM harmonics")
+        conn.commit()
         df[available].drop_duplicates(subset="timestamp").to_sql(
             "measurements_live", conn, if_exists="append", index=False
         )
-        print(f"[OK] {len(df)} Zeilen → measurements_live")
+        print(f"[OK] {len(df)} Zeilen -> measurements_live")
 
     # Harmonics
     harm_cols = [c for c in df.columns if c.endswith("_current_L1_pct")]
